@@ -19,6 +19,12 @@ state = {
     'ready': False
 }
 
+if 'ONESIGNAL_APP_ID' not in os.environ:
+    raise Exception('ONESIGNAL_APP_ID not set')
+
+if 'ONESIGNAL_API_KEY' not in os.environ:
+    raise Exception('ONESIGNAL_API_KEY not set')
+
 
 def one_signal_push(user_id, key, data):
     url = "https://onesignal.com/api/v1/notifications"
@@ -60,7 +66,9 @@ class Notification(NamedTuple):
 
 def background():
     try:
-        conn = psycopg.connect( os.environ['PG_CONNECTION'], autocommit=True)
+        conn_str = f"host={os.environ.get('POSTGRES_HOST', 'localhost')} port=5432 dbname={os.environ['POSTGRES_DB']} user={os.environ['POSTGRES_USER']} password={os.environ['POSTGRES_PASSWORD']} connect_timeout=10"
+        conn = psycopg.connect(conn_str, autocommit=True)
+        print('Connected to DB')
     except Exception as e:
         print(e)
         print("EXITING 1")
@@ -82,7 +90,7 @@ def background():
 
         if n.online and n.user_id in clients:
             print('sending directly to user', n.user_id);
-            clients[n.user_id].send(n.key + " " + json.dumps(n.data))
+            clients[n.user_id].send(json.dumps(dict(type=n.key, data=n.data)))
             mark_sent(n.id, 'direct')
         else:
             print('sending push (user', n.user_id, 'is', 'online' if n.online else 'OFFLINE', 'and',
@@ -106,7 +114,7 @@ def echo():
                     continue
                 print('AUTH', token)
                 clients[token] = ws
-                ws.send("AUTH OK")
+                ws.send(json.dumps(dict(type='auth', data='ok')))
                 continue
 
     except ConnectionClosed:
@@ -117,18 +125,11 @@ def echo():
 
 if __name__ == '__main__':
     state['ready'] = True
+
+    print("Starting background worker...")
+
     t = Thread(target=background)
     t.start()
-    from waitress import create_server
 
-    def handle_sig(sig, frame):
-        print(f"Got signal {sig}, now close worker...")
-        server.close()
-
-    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGQUIT, signal.SIGHUP):
-        signal.signal(sig, handle_sig)
-
-    server = create_server(app, host="0.0.0.0", port=5000)
-    server.run()
-    # app.run("0.0.0.0")
+    app.run(host="0.0.0.0", port=5001, debug=False)
     state['ready'] = False
